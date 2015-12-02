@@ -1,0 +1,60 @@
+global
+  maxconn 50000
+  pidfile /var/run/haproxy.pid
+
+  spread-checks 5
+
+  # Uncomment the statement below to turn on verbose logging
+  # debug
+
+  # ssl-default-bind-ciphers ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:ECDH+3DES:DH+3DES:RSA+AESGCM:RSA+AES:RSA+3DES:!aNULL:!MD5:!DSS
+  # ssl-default-bind-options no-sslv3
+
+defaults
+  log global
+  mode  http
+  balance roundrobin
+
+  option httplog
+  option dontlognull
+  option abortonclose
+  option httpclose
+  option forwardfor
+  option redispatch
+
+  retries 3
+
+  timeout client  30s
+  timeout connect 30s
+  timeout server  30s
+  timeout check 5s
+
+{% if env['HAPROXY_STATS_ENABLED']|lower == "true" %}
+listen stats
+  bind *:1936
+  stats enable
+  stats uri /
+  stats hide-version
+  stats refresh 5s
+  stats auth {{ env['HAPROXY_STATS_LOGIN'] }}
+{% endif %}
+
+frontend http-in
+  bind *:80
+  mode http
+  default_backend http-backend
+
+backend http-backend
+  http-request set-header X-Forwarded-Port %%[dst_port]
+  http-request add-header X-Forwarded-Proto https if { ssl_fc }
+  option httpchk HEAD /
+
+{% for node in backend_nodes %}
+  server {{ node['name'] }} {{ node['ip']}}:80 {{ 'check' if env['HAPROXY_HEALTH_CHECK_NODES']|lower == 'true' else '' }}
+{% endfor %}
+
+listen health
+  bind *:1937
+  acl servers_down nbsrv(http-backend) lt 1
+  monitor-uri /
+  monitor fail if servers_down
